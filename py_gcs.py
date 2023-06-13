@@ -1,4 +1,3 @@
-import math
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,9 +9,7 @@ from qlearning import QLearning
 from environment import GridEnvironment
 from agent import DynamicalSystem
 from util import generate_actions_vector, generate_states_vector
-
-DEFAULT_YAW = (1 / 2) * math.pi
-DEFAULT_ALTITUDE = 1.0
+import params
 
 command_help = {
     'exit': 'exit # exit this application',
@@ -38,14 +35,10 @@ class GCS:
         self.grid[0:5, 4] = 0
         self.grid[2:, 7] = 0
         self.waypoints = np.array([
-            (0, 0),
-            (0, 9),
-            (2, 9),
-            (2, 6),
-            (6, 6),
-            (6, 0),
-            (9, 0),
-            (9, 9)
+            (5, 0),
+            (5, 5),
+            (0, 5),
+            (0, 0)
         ])
 
     def check_arguments(self, command, args, condition):
@@ -66,6 +59,10 @@ class GCS:
         try:
             while True:
                 input = terminal.input().split()
+
+                if len(input) == 0:
+                    continue
+
                 command = input[0]
                 args = input[1:]
 
@@ -75,7 +72,11 @@ class GCS:
                 elif command == 'info':
                     terminal.log(f'Autopilot: {px4.get_autopilot()}')
                     terminal.log(f'Mode: {px4.get_mode()}')
-                    terminal.log(f'Local Position: {px4.get_local_position_ned()}')
+                    terminal.log(f'Local Position (NED): {px4.get_local_position_ned()}')
+                    terminal.log(f'Attitude (NED): {px4.get_attitude_ned()}')
+                    terminal.log(f'Local Position (FRD): {px4.get_local_position_frd()}')
+                    terminal.log(f'Attitude (FRD): {px4.get_attitude_frd()}')
+                    terminal.log(f'Current Setpoint (FRD): {px4.get_setpoint()}')
                 elif command == 'exit':
                     raise KeyboardInterrupt
                 elif command == 'kill':
@@ -111,12 +112,13 @@ class GCS:
                     
                     x = float(args[0])
                     y = float(args[1])
-                    z = DEFAULT_ALTITUDE
-                    yaw = DEFAULT_YAW
+                    z = params.DEFAULT_ALTITUDE
+                    yaw = params.DEFAULT_YAW
 
                     if len(args) == 3:
                         z = float(args[2])
                     elif len(args) == 4:
+                        z = float(args[2])
                         yaw = float(args[3])
                   
                     px4.set_setpoint(
@@ -130,8 +132,8 @@ class GCS:
                         px4.set_setpoint(
                             x=w[0],
                             y=w[1],
-                            z=DEFAULT_ALTITUDE,
-                            yaw=DEFAULT_YAW
+                            z=params.DEFAULT_ALTITUDE,
+                            yaw=params.DEFAULT_YAW
                         )
                         while not self.waypoint_reached(px4.get_setpoint(), px4.get_local_position_ned()):
                             continue

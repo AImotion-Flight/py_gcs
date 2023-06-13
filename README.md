@@ -12,7 +12,7 @@ Connect to PX4 over serial:
 python py_gcs.py /path/to/serial
 ```
 ## Commands
-Enter the commands ```commands``` to show all available commands:
+Enter the command ```commands``` to show all available commands:
 ```
 - MAVLink version: 2.0
 - system: 2

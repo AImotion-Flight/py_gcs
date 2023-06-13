@@ -1,0 +1,4 @@
+import math
+
+DEFAULT_YAW = 0
+DEFAULT_ALTITUDE = 3.0

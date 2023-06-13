@@ -1,9 +1,11 @@
 import time
+import math
 from pymavlink import mavutil
 import numpy as np
 
 from terminal import terminal
 from stoppable_thread import StoppableThread
+import params
 
 POSITION_ONLY_TYPEMASK = (
     mavutil.mavlink.POSITION_TARGET_TYPEMASK_VX_IGNORE |
@@ -23,17 +25,21 @@ class MAVLinkHandler:
         terminal.log(f'MAVLink version: {self.connection.WIRE_PROTOCOL_VERSION}')
         terminal.log(f'system: {self.connection.target_system}')
         terminal.log(f'component: {self.connection.target_component}')
-
-        #self.set_setpoint(0, 0, 0, 0)
         
-        terminal.log('waiting for initial position')
-        self.sp = None
-        while self.sp is None:
+        terminal.log('waiting for initial position and attitude')
+        self.origin = None
+        self.rot = None
+        while True:
             msg = self.connection.recv_msg()
             if msg is not None:
                 if msg.get_type() == 'LOCAL_POSITION_NED':
-                    self.sp = msg
-        terminal.log('got initial position')
+                    self.origin = msg
+                elif msg.get_type() == 'ATTITUDE':
+                    self.rot = msg
+            if self.origin is not None and self.rot is not None:
+                break
+        terminal.log('got initial position and attitude')
+        self.set_setpoint(self.origin.x, self.origin.y, self.origin.z, self.rot.yaw)
 
         self.read_thread = StoppableThread(target=self.read_message)
         self.write_thread = StoppableThread(target=self.write_setpoint)
@@ -58,7 +64,7 @@ class MAVLinkHandler:
     def read_message(self):
         msg = self.connection.recv_msg()
         if msg is not None:
-            if msg.get_type() == 'HEARTBEAT':
+            if msg.get_type() == 'ATTITUDE':
                 pass
 
     def write_setpoint(self):
@@ -69,18 +75,44 @@ class MAVLinkHandler:
         msg = self.connection.messages['LOCAL_POSITION_NED']
         return np.array((msg.x, msg.y, msg.z))
     
+    def get_local_position_frd(self):
+        x, y, z = self.get_local_position_ned()
+        x, y, z = self.transform_point(x, y, z)
+        return np.array((x, y, z))
+    
+    def get_attitude_ned(self):
+        msg = self.connection.messages['ATTITUDE']
+        return np.array((msg.roll, msg.pitch, msg.yaw))
+    
+    def get_attitude_frd(self):
+        roll, pitch, yaw = self.get_attitude_ned()
+        yaw = self.transform_yaw(yaw)
+        return np.array((roll, pitch, yaw))
+    
     def get_setpoint(self):
         return np.array((self.sp.x, self.sp.y, self.sp.z))
+    
+    def transform_point(self, x, y, z):
+        x_trans = x * math.cos(self.rot.yaw) + y * math.sin(self.rot.yaw)
+        y_trans = x * math.sin(self.rot.yaw) + y * math.cos(self.rot.yaw)
+        return x_trans, y_trans, z
+    
+    def transform_yaw(self, yaw):
+        yaw = yaw + math.pi
+        yaw_trans = (yaw + self.rot.yaw) % (2 * math.pi)
+        return yaw_trans - math.pi
 
     def set_setpoint(self, x, y, z, yaw):
+        x, y, z = self.transform_point(x, y, z)
+        yaw = self.transform_yaw(yaw)
         self.sp = self.connection.mav.set_position_target_local_ned_encode(
             time_boot_ms=int(self.connection.timestamp),
             target_system=self.connection.target_system,
             target_component=self.connection.target_component,
             coordinate_frame=mavutil.mavlink.MAV_FRAME_LOCAL_NED,
             type_mask=POSITION_ONLY_TYPEMASK,
-            x=y,
-            y=x,
+            x=x,
+            y=y,
             z=-z,
             vx=0.0,
             vy=0.0,
