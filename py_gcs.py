@@ -23,7 +23,7 @@ command_help = {
     'hold': 'hold # switch into \'Hold\' mode',
     'manual': 'hold # switch into \'Manual\' mode',
     'offboard': 'offboard # switch into \'Offboard\' mode',
-    'sp': 'sp <x> <y> (<z> <yaw>) # set a setpoint',
+    'sp': 'sp <x> <y> (<z> (<yaw>)) # set a setpoint',
     'waypoints': 'waypoints # move to waypoints',
     'plan': 'plan # trajectory with ITG',
     'traj': 'traj # print waypoints of trajectory',
@@ -40,9 +40,10 @@ class GCS:
         self.grid[0:5, 4] = 0
         self.grid[2:, 7] = 0
         self.waypoints = np.array([
-            (5, -0),
-            (5, -5),
+            (0, -0),
             (0, -5),
+            (5, -5),
+            (5, -0),
             (0, -0)
         ])
 
