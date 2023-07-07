@@ -2,18 +2,19 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import time
 
 from terminal import terminal
 from mavlink_handler import MAVLinkHandler
-from qlearning import QLearning
-from environment import GridEnvironment
-from agent import DynamicalSystem
-from util import generate_actions_vector, generate_states_vector
+from itg.qlearning import QLearning
+from itg.environment import GridEnvironment
+from itg.agent import DynamicalSystem
+from itg.util import generate_actions_vector, generate_states_vector
 import params
 
 command_help = {
     'exit': 'exit # exit this application',
-    'info': 'info # show MAV state',
+    'info': 'info (<frame>) # show MAV state',
     'kill': 'kill # force disarming of the UAV',
     'get': 'get <param> # get value of Parameter',
     'arm': 'arm # arm the UAV',
@@ -23,7 +24,11 @@ command_help = {
     'manual': 'hold # switch into \'Manual\' mode',
     'offboard': 'offboard # switch into \'Offboard\' mode',
     'sp': 'sp <x> <y> (<z> <yaw>) # set a setpoint',
-    'waypoints': 'waypoints # move to waypoints'
+    'waypoints': 'waypoints # move to waypoints',
+    'plan': 'plan # trajectory with ITG',
+    'traj': 'traj # print waypoints of trajectory',
+    'map': 'map # show map with trajectory'
+
 }
 
 class GCS:
@@ -35,10 +40,10 @@ class GCS:
         self.grid[0:5, 4] = 0
         self.grid[2:, 7] = 0
         self.waypoints = np.array([
-            (5, 0),
-            (5, 5),
-            (0, 5),
-            (0, 0)
+            (5, -0),
+            (5, -5),
+            (0, -5),
+            (0, -0)
         ])
 
     def check_arguments(self, command, args, condition):
@@ -70,13 +75,22 @@ class GCS:
                     for help in command_help:
                         terminal.log(command_help[help])
                 elif command == 'info':
+                    frame = 'frd'
+
+                    if len(args) == 1:
+                        frame = args[0]
+
                     terminal.log(f'Autopilot: {px4.get_autopilot()}')
                     terminal.log(f'Mode: {px4.get_mode()}')
-                    terminal.log(f'Local Position (NED): {px4.get_local_position_ned()}')
-                    terminal.log(f'Attitude (NED): {px4.get_attitude_ned()}')
-                    terminal.log(f'Local Position (FRD): {px4.get_local_position_frd()}')
-                    terminal.log(f'Attitude (FRD): {px4.get_attitude_frd()}')
-                    terminal.log(f'Current Setpoint (FRD): {px4.get_setpoint()}')
+
+                    if frame == 'frd':
+                        terminal.log(f'Local Position (FRD): {px4.get_local_position_frd()}')
+                        terminal.log(f'Attitude (FRD): {px4.get_attitude_frd()}')
+                        terminal.log(f'Current Setpoint (FRD): {px4.get_setpoint_frd()}')
+                    elif frame == 'ned':
+                        terminal.log(f'Local Position (NED): {px4.get_local_position_ned()}')
+                        terminal.log(f'Attitude (NED): {px4.get_attitude_ned()}')
+                        terminal.log(f'Current Setpoint (NED): {px4.get_setpoint_ned()}')
                 elif command == 'exit':
                     raise KeyboardInterrupt
                 elif command == 'kill':
@@ -122,28 +136,29 @@ class GCS:
                         yaw = float(args[3])
                   
                     px4.set_setpoint(
-                        x=x,
-                        y=y,
-                        z=z,
+                        pos=np.array((x, y, z)),
                         yaw=yaw
                     )
                 elif command == 'waypoints':
                     for w in self.waypoints:
                         px4.set_setpoint(
-                            x=w[0],
-                            y=w[1],
-                            z=params.DEFAULT_ALTITUDE,
+                            pos=np.array((w[0], w[1], params.DEFAULT_ALTITUDE)),
                             yaw=params.DEFAULT_YAW
                         )
-                        while not self.waypoint_reached(px4.get_setpoint(), px4.get_local_position_ned()):
-                            continue
+                        time.sleep(2)
+                    px4.land()                        
                 elif command == 'plan':
+                    plot = False
+
+                    if len(args) == 1:
+                        plot == True if args[0] == 't' else False
+
                     env = GridEnvironment(self.grid)
                     size = np.shape(self.grid)
                     vstates = generate_states_vector(size[1], size[0], range(self.args.lower_vel, self.args.upper_vel + 1))
                     vactions = generate_actions_vector(range(self.args.lower_accel, self.args.upper_accel + 1))
                     agent = DynamicalSystem(vstates, vactions, self.args.lower_vel, self.args.upper_vel)
-                    qlearning = QLearning((0, 0, 0, 0), (9, 9, 0, 0), agent, env, 50000, 0.9, 0.9, 0.1, False)
+                    qlearning = QLearning((0, 0, 0, 0), (9, 9, 0, 0), agent, env, 50000, 0.9, 0.9, 0.1, plot)
 
                     if os.path.exists('Q.npy'):
                         qlearning.load('Q.npy')
@@ -152,7 +167,10 @@ class GCS:
                         qlearning.save('Q.npy')
 
                     policy = qlearning.get_policy()
-                    self.waypoints = policy[0][:, 0:3]
+                    self.waypoints = policy[0][:, 0:2]
+                    self.waypoints[:, 1] = -self.waypoints[:, 1]
+                elif command == 'traj':
+                    terminal.log(self.waypoints)
                 elif command == 'map':
                     size = np.shape(self.grid)
                     fig, ax = plt.subplots()
@@ -174,8 +192,8 @@ class GCS:
                     ax.imshow(self.grid, cmap='gray', origin='lower')
                     ax.plot(0, 0, 'go')
                     ax.plot(9, 9, 'r*')
-                    ax.plot(self.waypoints[:, 0], self.waypoints[:, 1], 'b--')
-                    ax.plot(self.waypoints[-1, 0], self.waypoints[-1, 1], 'rx')
+                    ax.plot(self.waypoints[:, 0], -self.waypoints[:, 1], 'b--')
+                    ax.plot(self.waypoints[-1, 0], -self.waypoints[-1, 1], 'rx')
                     fig.show()
                 else:
                     terminal.log('unknown command')
@@ -189,7 +207,7 @@ parser = argparse.ArgumentParser(
     description='Python MAVLink GCS for sending Position Setpoints in Offboard-Mode'
 )
 parser.add_argument('url', type=str, help='udpin:<ip>:<port> or /<path>/<to>/<serial>')
-parser.add_argument('-wt', '--waypoint_thresh', type=float, help='Distance from waypoint to consider it reached.', default=0.5)
+parser.add_argument('-wt', '--waypoint_thresh', type=float, help='Distance from waypoint to consider it reached.', default=2.0)
 parser.add_argument('-lv', '--lower_vel', type=int, help='Lower bound for velocity.', default=-2)
 parser.add_argument('-uv', '--upper_vel', type=int, help='Upper bound for velocity.', default=2)
 parser.add_argument('-la', '--lower_accel', type=int, help='Lower bound for acceleration .', default=-1)

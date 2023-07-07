@@ -1,0 +1,3 @@
+[submodule "itg"]
+	path = itg
+	url = git@github.com:AImotion-Flight/itg.git

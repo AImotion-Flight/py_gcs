@@ -5,7 +5,7 @@ import numpy as np
 
 from terminal import terminal
 from stoppable_thread import StoppableThread
-import params
+from util import transform_yaw
 
 POSITION_ONLY_TYPEMASK = (
     mavutil.mavlink.POSITION_TARGET_TYPEMASK_VX_IGNORE |
@@ -21,11 +21,11 @@ class MAVLinkHandler:
     def __init__(self, url):
         self.connection = mavutil.mavlink_connection(url, baud=57600, dialect='common', source_system=254)
         self.connection.wait_heartbeat()
-        
+
         terminal.log(f'MAVLink version: {self.connection.WIRE_PROTOCOL_VERSION}')
         terminal.log(f'system: {self.connection.target_system}')
         terminal.log(f'component: {self.connection.target_component}')
-        
+
         terminal.log('waiting for initial position and attitude')
         self.origin = None
         self.rot = None
@@ -39,7 +39,14 @@ class MAVLinkHandler:
             if self.origin is not None and self.rot is not None:
                 break
         terminal.log('got initial position and attitude')
-        self.set_setpoint(self.origin.x, self.origin.y, self.origin.z, self.rot.yaw)
+
+        self.frd_to_ned = np.zeros((2, 2))
+        self.frd_to_ned[0, 0] = math.cos(self.rot.yaw)
+        self.frd_to_ned[0, 1] = -math.sin(self.rot.yaw)
+        self.frd_to_ned[1, 0] = math.sin(self.rot.yaw)
+        self.frd_to_ned[1, 1] = math.cos(self.rot.yaw)
+
+        self.set_setpoint(np.array((self.origin.x, self.origin.y, self.origin.z)), self.rot.yaw)
 
         self.read_thread = StoppableThread(target=self.read_message)
         self.write_thread = StoppableThread(target=self.write_setpoint)
@@ -74,37 +81,36 @@ class MAVLinkHandler:
     def get_local_position_ned(self):
         msg = self.connection.messages['LOCAL_POSITION_NED']
         return np.array((msg.x, msg.y, msg.z))
-    
+
     def get_local_position_frd(self):
-        x, y, z = self.get_local_position_ned()
-        x, y, z = self.transform_point(x, y, z)
-        return np.array((x, y, z))
-    
+        pos = self.get_local_position_ned()
+        x, y = np.linalg.inv(self.frd_to_ned) @ pos[:2]
+        pos[0] = x
+        pos[1] = y
+        return pos
+
     def get_attitude_ned(self):
         msg = self.connection.messages['ATTITUDE']
         return np.array((msg.roll, msg.pitch, msg.yaw))
-    
+
     def get_attitude_frd(self):
         roll, pitch, yaw = self.get_attitude_ned()
-        yaw = self.transform_yaw(yaw)
+        yaw = transform_yaw(yaw, -self.rot.yaw)
         return np.array((roll, pitch, yaw))
-    
-    def get_setpoint(self):
-        return np.array((self.sp.x, self.sp.y, self.sp.z))
-    
-    def transform_point(self, x, y, z):
-        x_trans = x * math.cos(self.rot.yaw) + y * math.sin(self.rot.yaw)
-        y_trans = x * math.sin(self.rot.yaw) + y * math.cos(self.rot.yaw)
-        return x_trans, y_trans, z
-    
-    def transform_yaw(self, yaw):
-        yaw = yaw + math.pi
-        yaw_trans = (yaw + self.rot.yaw) % (2 * math.pi)
-        return yaw_trans - math.pi
 
-    def set_setpoint(self, x, y, z, yaw):
-        x, y, z = self.transform_point(x, y, z)
-        yaw = self.transform_yaw(yaw)
+    def get_setpoint_ned(self):
+        return np.array((self.sp.x, self.sp.y, self.sp.z))
+
+    def get_setpoint_frd(self):
+        sp = self.get_setpoint_ned()
+        x, y = np.linalg.inv(self.frd_to_ned) @ sp[:2]
+        sp[0] = x
+        sp[1] = y
+        return sp
+
+    def set_setpoint(self, pos, yaw):
+        x, y = self.frd_to_ned @ pos[:2]
+        yaw = transform_yaw(yaw, self.rot.yaw)
         self.sp = self.connection.mav.set_position_target_local_ned_encode(
             time_boot_ms=int(self.connection.timestamp),
             target_system=self.connection.target_system,
@@ -113,7 +119,7 @@ class MAVLinkHandler:
             type_mask=POSITION_ONLY_TYPEMASK,
             x=x,
             y=y,
-            z=-z,
+            z=-pos[2],
             vx=0.0,
             vy=0.0,
             vz=0.0,
